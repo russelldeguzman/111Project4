@@ -35,6 +35,7 @@ static int listen_port;
 
 #define TASKBUFSIZ	4096	// Size of task_t::buf
 #define FILENAMESIZ	256	// Size of task_t::filename
+#define MAXCONCURRENT 5 // Maximum number of concurrent uploads allowed.
 
 typedef enum tasktype {		// Which type of connection is this?
 	TASK_TRACKER,		// => Tracker connection
@@ -688,7 +689,13 @@ int main(int argc, char *argv[])
 	char *s;
 	const char *myalias;
 	struct passwd *pwent;
-
+	
+	pid_t pid;
+	pid_t uploads[MAXCONCURRENT];
+	int concurrent_count;
+	int status;
+	int i;
+	
 	osp2p_sscanf("164.67.100.231:12997", "%I:%d",
 		     &tracker_addr, &tracker_port);
 	if ((pwent = getpwuid(getuid()))) {
@@ -737,20 +744,67 @@ int main(int argc, char *argv[])
 );
 		exit(0);
 	}
-
+	
 	// Connect to the tracker and register our files.
 	tracker_task = start_tracker(tracker_addr, tracker_port);
 	listen_task = start_listen();
 	register_files(tracker_task, myalias);
 
-	// First, download files named on command line.
-	for (; argc > 1; argc--, argv++)
-		if ((t = start_download(tracker_task, argv[1])))
-			task_download(t, tracker_task);
 
+	concurrent_count = argc;
+	// First, download files named on command line.
+	for (; argc > 1; argc--, argv++) {
+		pid = fork();
+		if (pid == 0 && (t = start_download(tracker_task, argv[1])))
+			task_download(t, tracker_task);
+	}
+	
+	while (concurrent_count != 0) {
+		waitpid(-1, &status, 0);
+		if (!WIFEXITED(status)) {
+			die("Error when downloading");
+		}
+		concurrent_count--;
+	}
+	
+	// We'll only allow five concurrent uploads to avoid abuse via DOS
+	for (i = 0; i < MAXCONCURRENT; i++) {
+		uploads[i] = -1;
+	}
+	
 	// Then accept connections from other peers and upload files to them!
-	while ((t = task_listen(listen_task)))
-		task_upload(t);
+	while ((t = task_listen(listen_task))) {
+		for (i = 0; i < MAXCONCURRENT; i++) {
+			// First we clean up exited processes
+			if (uploads[i] != -1) {
+				pid = waitpid(uploads[i], &status, WNOHANG);
+				if (pid == uploads[i]) {
+					if (!WIFEXITED(status) {
+						error("Error in uploading");
+					}
+					concurrent_count--;
+					uploads[i] = -1;
+				} else if (pid == -1) {
+					error("An upload failed");
+				}
+			}
+			
+			// If a space is open, we fork a new process to it.
+			if (uploads[i] == -1) {
+				concurrent_count++;
+				uploads[i] = fork();
+				break;
+			}
+		}
+		
+		// If we forked a new process, upload. If we are maxed out on
+		// concurrent uploads, throw out an error.
+		if (uploads[i] == 0) {
+			task_upload(t);
+		} else if (concurrent_count == MAXCONCURRENT) {
+			error("Too many uploads already");
+		}
+	}
 
 	return 0;
 }
