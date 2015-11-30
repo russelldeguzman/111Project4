@@ -690,7 +690,6 @@ static void task_upload(task_t *t)
 		goto exit;
 	}
 	
-	
 
 	message("* Transferring file %s\n", t->filename);
 	// Now, read file from disk and write it to the requesting peer.
@@ -711,7 +710,7 @@ static void task_upload(task_t *t)
 	}
 
 	message("* Upload of %s complete\n", t->filename);
-
+	
     exit:
 	task_free(t);
 }
