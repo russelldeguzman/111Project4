@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <netinet/in.h>
@@ -648,11 +649,48 @@ static void task_upload(task_t *t)
 	}
 	t->head = t->tail = 0;
 
+	// If a peer is attempting to access files it doesn't have rights
+	// to see, die.
+	if (t->filename[0] == '~' || t->filename[0] == '/' ||
+	(t->filename[0] == '.' && t->filename[1] == '.')) {
+		die("Trying to access a file outside of current directory");
+	}
+	
+	// If there are more /../ than there are subdirectories in a path,
+	// the requester is trying to be sneaky.
+	char *tok;
+	char temp[FILENAMESIZ];
+	strcpy(temp, t->filename);
+	int depth = 0;
+	
+	while (1) {
+		tok = strtok(temp, "/");
+		if (tok == NULL) {
+			break;
+		} else {
+			// If a directory is .., decrement. If it's ., do nothing.
+			// otherwise increment
+			if (strcmp(tok, "..") == 0) {
+				depth--;
+			} else if (strcmp(tok, ".") == 0) {
+				continue;
+			} else {
+				depth++;
+			}
+		}
+	}
+	
+	if (depth < 0) {
+		die("Trying to access a file outside of current directory");
+	}
+
 	t->disk_fd = open(t->filename, O_RDONLY);
 	if (t->disk_fd == -1) {
 		error("* Cannot open file %s", t->filename);
 		goto exit;
 	}
+	
+	
 
 	message("* Transferring file %s\n", t->filename);
 	// Now, read file from disk and write it to the requesting peer.
@@ -779,7 +817,7 @@ int main(int argc, char *argv[])
 			if (uploads[i] != -1) {
 				pid = waitpid(uploads[i], &status, WNOHANG);
 				if (pid == uploads[i]) {
-					if (!WIFEXITED(status) {
+					if (!WIFEXITED(status)) {
 						error("Error in uploading");
 					}
 					concurrent_count--;
