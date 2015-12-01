@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -670,7 +671,7 @@ static void task_upload(task_t *t)
 	t->head = t->tail = 0;
 	
 	//TASK 2:  Check that we're requesting a file from only the current directory. 
-	curr_p = getcwd(cur_path, PATH_MAX);
+	curr_p = getcwd(curr_path, PATH_MAX);
 	req_p = realpath(t->filename, req_path);
 	
 	if(curr_p == NULL || req_p == NULL){
@@ -795,9 +796,9 @@ int main(int argc, char *argv[])
 	
 	while (concurrent_count != 0) {
 		waitpid(-1, &status, 0);
-		if (!WIFEXITED(status)) {
-			die("Error when downloading");
-		}
+		//if (!WIFEXITED(status)) {
+		//	die("Error when downloading");
+		//}
 		concurrent_count--;
 	}
 	
@@ -813,7 +814,7 @@ int main(int argc, char *argv[])
 			if (uploads[i] != -1) {
 				pid = waitpid(uploads[i], &status, WNOHANG);
 				if (pid == uploads[i]) {
-					if (!WIFEXITED(status) {
+					if (!WIFEXITED(status)) {
 						error("Error in uploading");
 					}
 					concurrent_count--;
