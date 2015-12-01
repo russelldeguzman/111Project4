@@ -5,7 +5,6 @@
 #include <errno.h>
 #include <signal.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <netinet/in.h>
@@ -463,8 +462,13 @@ task_t *start_download(task_t *tracker_task, const char *filename)
 	assert(tracker_task->type == TASK_TRACKER);
 
 	message("* Finding peers for '%s'\n", filename);
-
-	osp2p_writef(tracker_task->peer_fd, "WANT %s\n", filename);
+	//Task 2: filename could also potnetially buffer-overflow here.
+	//Fix: If-statement check. 
+	if(strlen(filename) <= FILENAMESIZ) osp2p_writef(tracker_task->peer_fd, "WANT %s\n", filename);
+	else{
+		 error("The filename is too large!\n");
+		 goto exit;
+	}
 	messagepos = read_tracker_response(tracker_task);
 	if (tracker_task->buf[messagepos] != '2') {
 		error("* Tracker error message while requesting '%s':\n%s",
@@ -476,8 +480,14 @@ task_t *start_download(task_t *tracker_task, const char *filename)
 		error("* Error while allocating task");
 		goto exit;
 	}
-	strcpy(t->filename, filename);
-
+	//Task 2: filename could overflow t->filename if it is too big
+	//FIX: If statement check.
+	if(strlen(filename) <= FILENAMESIZ) strcpy(t->filename, filename); 
+	else{
+		error("The filename is too large!\n");
+		goto exit;
+	} 
+									
 	// add peers
 	s1 = tracker_task->buf;
 	while ((s2 = memchr(s1, '\n', (tracker_task->buf + messagepos) - s1))) {
@@ -630,9 +640,19 @@ static task_t *task_listen(task_t *listen_task)
 //	the requested file.
 static void task_upload(task_t *t)
 {
+	char curr_path[PATH_MAX]; //current path buffer
+	char req_path[PATH_MAX]; //requested path buffer
+	char *curr_p; //current path pointer 
+	char *req_p; //requested path pointer
+	
 	assert(t->type == TASK_UPLOAD);
 	// First, read the request from the peer.
 	while (1) {
+		//TASK 2: Check if the size is greater than the buffer size. 
+		if((t->head - t->tail) > TASKBUFSIZ){
+			error("File size too big for the buffer!\n");
+			goto exit;
+		}
 		int ret = read_to_taskbuf(t->peer_fd, t);
 		if (ret == TBUF_ERROR) {
 			error("* Cannot read from connection");
@@ -648,48 +668,25 @@ static void task_upload(task_t *t)
 		goto exit;
 	}
 	t->head = t->tail = 0;
-
-	// If a peer is attempting to access files it doesn't have rights
-	// to see, die.
-	if (t->filename[0] == '~' || t->filename[0] == '/' ||
-	(t->filename[0] == '.' && t->filename[1] == '.')) {
-		die("Trying to access a file outside of current directory");
+	
+	//TASK 2:  Check that we're requesting a file from only the current directory. 
+	curr_p = getcwd(cur_path, PATH_MAX);
+	req_p = realpath(t->filename, req_path);
+	
+	if(curr_p == NULL || req_p == NULL){
+		error("Path error, current or requested path doesn't exit!\n");
+		goto exit;
+	}
+	if(strncmp(curr_p, req_p, strlen(curr_p))){
+		error("The requested path is outside the current path!\n");
+		goto exit;
 	}
 	
-	// If there are more /../ than there are subdirectories in a path,
-	// the requester is trying to be sneaky.
-	char *tok;
-	char temp[FILENAMESIZ];
-	strcpy(temp, t->filename);
-	int depth = 0;
-	
-	while (1) {
-		tok = strtok(temp, "/");
-		if (tok == NULL) {
-			break;
-		} else {
-			// If a directory is .., decrement. If it's ., do nothing.
-			// otherwise increment
-			if (strcmp(tok, "..") == 0) {
-				depth--;
-			} else if (strcmp(tok, ".") == 0) {
-				continue;
-			} else {
-				depth++;
-			}
-		}
-	}
-	
-	if (depth < 0) {
-		die("Trying to access a file outside of current directory");
-	}
-
 	t->disk_fd = open(t->filename, O_RDONLY);
 	if (t->disk_fd == -1) {
 		error("* Cannot open file %s", t->filename);
 		goto exit;
 	}
-	
 
 	message("* Transferring file %s\n", t->filename);
 	// Now, read file from disk and write it to the requesting peer.
@@ -710,7 +707,7 @@ static void task_upload(task_t *t)
 	}
 
 	message("* Upload of %s complete\n", t->filename);
-	
+
     exit:
 	task_free(t);
 }
@@ -816,7 +813,7 @@ int main(int argc, char *argv[])
 			if (uploads[i] != -1) {
 				pid = waitpid(uploads[i], &status, WNOHANG);
 				if (pid == uploads[i]) {
-					if (!WIFEXITED(status)) {
+					if (!WIFEXITED(status) {
 						error("Error in uploading");
 					}
 					concurrent_count--;
