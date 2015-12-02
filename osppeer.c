@@ -420,7 +420,9 @@ static void register_files(task_t *tracker_task, const char *myalias)
 			    || ent->d_name[namelen - 1] == 'h'))
 		    || (namelen > 1 && ent->d_name[namelen - 1] == '~'))
 			continue;
-
+		
+		//TASK 2:
+		if(strlen(ent->d_name) > FILENAMESIZ) die("Name too long to register \n");
 		osp2p_writef(tracker_task->peer_fd, "HAVE %s\n", ent->d_name);
 		messagepos = read_tracker_response(tracker_task);
 		if (tracker_task->buf[messagepos] != '2')
@@ -536,6 +538,8 @@ static void task_download(task_t *t, task_t *tracker_task)
 		error("* Cannot connect to peer: %s\n", strerror(errno));
 		goto try_again;
 	}
+	//TASK 2
+	if(strlen(t->filename) > FILENAMESIZ) die("This filename is too long to download! \n");
 	osp2p_writef(t->peer_fd, "GET %s OSP2P\n", t->filename);
 
 	// Open disk file for the result.
